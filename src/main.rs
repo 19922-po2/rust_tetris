@@ -1,4 +1,5 @@
 //use std::io::Write;
+use rand::Rng;
 use std::thread;
 use std::time::Duration;
 
@@ -35,11 +36,33 @@ fn draw_game(game_board: &Vec<Vec<u32>>) {
 
 fn move_block(game_board: &mut Vec<Vec<u32>>, current_block: &mut Vec<(usize, usize)>) {
     for (x, y) in current_block.clone() {
-        game_board[y][x] = 0;
-        game_board[y + 1][x] = 1;
-        current_block.push((x, y + 1));
-        current_block.remove(0);
+        if y < game_board.len() - 2 {
+            game_board[y][x] = 0;
+            game_board[y + 1][x] = 1;
+            current_block.push((x, y + 1));
+            current_block.remove(0);
+        }
     }
+}
+
+fn generate_random_block() -> Vec<(usize, usize)> {
+    let mut rng = rand::thread_rng();
+    let x = rng.gen_range(1..=BOARD_WIDTH - 2); // Random x position within the board width (leaving space for wide blocks)
+
+    // Define the possible Tetris shapes
+    let shapes = vec![
+        vec![(x, 1), (x, 2), (x, 3), (x, 4)],             // I-shape
+        vec![(x, 1), (x + 1, 1), (x, 2), (x + 1, 2)],     // O-shape
+        vec![(x, 1), (x + 1, 1), (x + 2, 1), (x + 1, 2)], // T-shape
+        vec![(x, 1), (x + 1, 1), (x + 1, 2), (x + 2, 2)], // Z-shape
+        vec![(x + 1, 1), (x + 2, 1), (x, 2), (x + 1, 2)], // S-shape
+        vec![(x, 1), (x, 2), (x + 1, 2), (x + 2, 2)],     // L-shape
+        vec![(x + 2, 1), (x, 2), (x + 1, 2), (x + 2, 2)], // J-shape
+    ];
+
+    // Randomly select a shape
+    let shape = rng.gen_range(0..shapes.len());
+    shapes[shape].clone()
 }
 
 fn main() {
@@ -47,16 +70,19 @@ fn main() {
     println!("Tetris Game");
 
     let mut game_board: Vec<Vec<u32>> = vec![vec![0; BOARD_WIDTH + 1]; BOARD_HEIGHT + 1];
-    let mut current_block: Vec<(usize, usize)> = vec![(4, 4), (4, 5)];
+
+    //let mut current_block: Vec<(usize, usize)> = vec![(4, 4), (4, 5)];
+    let mut current_block: Vec<(usize, usize)> = generate_random_block();
 
     //draw_game(&game_board);
     loop {
-        println!("{:?}", &current_block);
         // Game loop
         clear_terminal();
+        println!("{:?}", &current_block);
+
         move_block(&mut game_board, &mut current_block);
         draw_game(&game_board);
 
-        thread::sleep(Duration::from_secs(1));
+        thread::sleep(Duration::from_millis(500));
     }
 }
