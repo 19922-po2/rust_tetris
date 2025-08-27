@@ -1,88 +1,320 @@
-//use std::io::Write;
+use crossterm::{
+    cursor,
+    event::{self, Event, KeyCode},
+    execute,
+    style::{Color, Print, ResetColor, SetBackgroundColor},
+    terminal::{self, ClearType},
+};
 use rand::Rng;
+use std::io::{Write, stdout};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-const BOARD_WIDTH: usize = 10;
-const BOARD_HEIGHT: usize = 25; // board is 20 height visible and 5 hidden
+const ROWS: usize = 20;
+const COLS: usize = 10;
 
-fn clear_terminal() {
-    print!("\x1B[2J\x1B[H"); // Clear the screen and move the cursor to the top-left corner
-    //std::io::stdout().flush().unwrap(); // Ensure the output is flushed immediately
+type Board = [[u8; COLS]; ROWS];
+
+#[derive(Clone, Copy)]
+enum BlockType {
+    T,
+    L,
+    S,
+    Z,
+    I,
 }
 
-fn draw_empty_or_block(x: usize, y: usize, game_board: &Vec<Vec<u32>>) {
-    if game_board[y][x] == 0 {
-        print!("  ");
-    } else {
-        print!("\u{2B1C}");
+#[derive(Clone)]
+struct Block {
+    rotations: Vec<[(i32, i32); 4]>,
+}
+
+impl Block {
+    fn get_cells(&self, rotation: usize) -> &[(i32, i32); 4] {
+        &self.rotations[rotation % self.rotations.len()]
     }
 }
 
-fn draw_game(game_board: &Vec<Vec<u32>>) {
-    println!();
-    for y in 5..game_board.len() {
-        for x in 0..game_board[y].len() + 1 {
-            if x == 0 || x == 11 || y == BOARD_HEIGHT {
-                print!("\u{2B1B}") // 2B1C white square, 2B1B black square
-            } else {
-                //print!("  ");
-                draw_empty_or_block(x, y, game_board);
-            }
-        }
-        println!();
-    }
-}
-
-fn move_block(game_board: &mut Vec<Vec<u32>>, current_block: &mut Vec<(usize, usize)>) {
-    for (x, y) in current_block.clone() {
-        if y < game_board.len() - 2 {
-            game_board[y][x] = 0;
-            game_board[y + 1][x] = 1;
-            current_block.push((x, y + 1));
-            current_block.remove(0);
-        }
-    }
-}
-
-fn generate_random_block() -> Vec<(usize, usize)> {
-    let mut rng = rand::thread_rng();
-    let x = rng.gen_range(1..=BOARD_WIDTH - 2); // Random x position within the board width (leaving space for wide blocks)
-
-    // Define the possible Tetris shapes
-    let shapes = vec![
-        vec![(x, 1), (x, 2), (x, 3), (x, 4)],             // I-shape
-        vec![(x, 1), (x + 1, 1), (x, 2), (x + 1, 2)],     // O-shape
-        vec![(x, 1), (x + 1, 1), (x + 2, 1), (x + 1, 2)], // T-shape
-        vec![(x, 1), (x + 1, 1), (x + 1, 2), (x + 2, 2)], // Z-shape
-        vec![(x + 1, 1), (x + 2, 1), (x, 2), (x + 1, 2)], // S-shape
-        vec![(x, 1), (x, 2), (x + 1, 2), (x + 2, 2)],     // L-shape
-        vec![(x + 2, 1), (x, 2), (x + 1, 2), (x + 2, 2)], // J-shape
-    ];
-
-    // Randomly select a shape
-    let shape = rng.gen_range(0..shapes.len());
-    shapes[shape].clone()
+struct Game {
+    board: Board,
+    falling_block: BlockType,
+    rotation: usize,
+    row: i32,
+    col: i32,
+    score: u32,
 }
 
 fn main() {
-    clear_terminal();
-    println!("Tetris Game");
+    let mut stdout = stdout();
+    terminal::enable_raw_mode().unwrap();
+    execute!(stdout, terminal::Clear(ClearType::All)).unwrap();
 
-    let mut game_board: Vec<Vec<u32>> = vec![vec![0; BOARD_WIDTH + 1]; BOARD_HEIGHT + 1];
+    let blocks = init_blocks();
+    let mut game = Game {
+        board: [[0; COLS]; ROWS],
+        falling_block: random_block(),
+        rotation: 0,
+        row: 0,
+        col: 3,
+        score: 0,
+    };
 
-    //let mut current_block: Vec<(usize, usize)> = vec![(4, 4), (4, 5)];
-    let mut current_block: Vec<(usize, usize)> = generate_random_block();
+    // Input cooldown timers
+    let mut last_up = Instant::now() - Duration::from_millis(200);
+    let mut last_left = Instant::now() - Duration::from_millis(200);
+    let mut last_right = Instant::now() - Duration::from_millis(200);
+    let mut last_down = Instant::now() - Duration::from_millis(200);
+    let key_cooldown = Duration::from_millis(150);
 
-    //draw_game(&game_board);
+    // Falling timer
+    let mut fall_timer = 0;
+    let fall_interval = 400; // milliseconds
+
     loop {
-        // Game loop
-        clear_terminal();
-        println!("{:?}", &current_block);
+        render(&game, &blocks);
 
-        move_block(&mut game_board, &mut current_block);
-        draw_game(&game_board);
+        // Handle key input
+        if event::poll(Duration::from_millis(20)).unwrap() {
+            if let Event::Key(key_event) = event::read().unwrap() {
+                match key_event.code {
+                    KeyCode::Up => {
+                        if last_up.elapsed() >= key_cooldown {
+                            rotate_block(&mut game, &blocks);
+                            last_up = Instant::now();
+                        }
+                    }
+                    KeyCode::Left => {
+                        if last_left.elapsed() >= key_cooldown {
+                            try_move(&mut game, &blocks, -1, 0);
+                            last_left = Instant::now();
+                        }
+                    }
+                    KeyCode::Right => {
+                        if last_right.elapsed() >= key_cooldown {
+                            try_move(&mut game, &blocks, 1, 0);
+                            last_right = Instant::now();
+                        }
+                    }
+                    KeyCode::Down => {
+                        if last_down.elapsed() >= key_cooldown {
+                            try_move(&mut game, &blocks, 0, 1);
+                            last_down = Instant::now();
+                        }
+                    }
+                    KeyCode::Char('q') => break,
+                    _ => {}
+                }
+            }
+        }
 
-        thread::sleep(Duration::from_millis(500));
+        // Falling logic
+        fall_timer += 20;
+        if fall_timer >= fall_interval {
+            fall_timer = 0;
+            if !try_move(&mut game, &blocks, 0, 1) {
+                settle_block(&mut game, &blocks);
+                collapse_rows(&mut game);
+                game.falling_block = random_block();
+                game.rotation = 0;
+                game.row = 0;
+                game.col = 3;
+
+                if !is_drawable(&game, &blocks, game.row, game.col, game.rotation) {
+                    execute!(stdout, terminal::Clear(ClearType::All)).unwrap();
+                    println!("Game Over! Final Score: {}", game.score);
+                    break;
+                }
+            }
+        }
+
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    terminal::disable_raw_mode().unwrap();
+}
+
+fn init_blocks() -> Vec<Block> {
+    vec![
+        // T Block
+        Block {
+            rotations: vec![
+                [(0, 1), (1, 0), (1, 1), (1, 2)],
+                [(0, 1), (1, 1), (1, 2), (2, 1)],
+                [(1, 0), (1, 1), (1, 2), (2, 1)],
+                [(0, 1), (1, 0), (1, 1), (2, 1)],
+            ],
+        },
+        // L Block
+        Block {
+            rotations: vec![
+                [(0, 0), (1, 0), (1, 1), (1, 2)],
+                [(0, 1), (0, 2), (1, 1), (2, 1)],
+                [(1, 0), (1, 1), (1, 2), (2, 2)],
+                [(0, 1), (1, 1), (2, 0), (2, 1)],
+            ],
+        },
+        // S Block
+        Block {
+            rotations: vec![
+                [(0, 1), (0, 2), (1, 0), (1, 1)],
+                [(0, 0), (1, 0), (1, 1), (2, 1)],
+            ],
+        },
+        // Z Block
+        Block {
+            rotations: vec![
+                [(0, 0), (0, 1), (1, 1), (1, 2)],
+                [(0, 1), (1, 0), (1, 1), (2, 0)],
+            ],
+        },
+        // I Block
+        Block {
+            rotations: vec![
+                [(0, 0), (1, 0), (2, 0), (3, 0)],
+                [(0, 0), (0, 1), (0, 2), (0, 3)],
+            ],
+        },
+    ]
+}
+
+fn random_block() -> BlockType {
+    match rand::thread_rng().gen_range(0..5) {
+        0 => BlockType::T,
+        1 => BlockType::L,
+        2 => BlockType::S,
+        3 => BlockType::Z,
+        _ => BlockType::I,
+    }
+}
+
+fn block_index(block: BlockType) -> usize {
+    match block {
+        BlockType::T => 0,
+        BlockType::L => 1,
+        BlockType::S => 2,
+        BlockType::Z => 3,
+        BlockType::I => 4,
+    }
+}
+
+fn render(game: &Game, blocks: &[Block]) {
+    let mut stdout = stdout();
+    execute!(stdout, terminal::Clear(ClearType::All)).unwrap();
+
+    // Draw board
+    for r in 0..ROWS {
+        for c in 0..COLS {
+            if game.board[r][c] > 0 {
+                execute!(
+                    stdout,
+                    cursor::MoveTo(c as u16 * 2, r as u16),
+                    SetBackgroundColor(Color::Cyan),
+                    Print("  "),
+                    ResetColor
+                )
+                .unwrap();
+            }
+        }
+    }
+
+    // Draw falling block
+    let idx = block_index(game.falling_block);
+    for (dr, dc) in blocks[idx].get_cells(game.rotation) {
+        let r = game.row + dr;
+        let c = game.col + dc;
+        if r >= 0 && r < ROWS as i32 && c >= 0 && c < COLS as i32 {
+            execute!(
+                stdout,
+                cursor::MoveTo(c as u16 * 2, r as u16),
+                SetBackgroundColor(Color::Blue),
+                Print("  "),
+                ResetColor
+            )
+            .unwrap();
+        }
+    }
+
+    // Draw score
+    execute!(
+        stdout,
+        cursor::MoveTo(0, ROWS as u16 + 1),
+        Print(format!("Score: {}", game.score))
+    )
+    .unwrap();
+
+    stdout.flush().unwrap();
+}
+
+fn is_drawable(game: &Game, blocks: &[Block], row: i32, col: i32, rotation: usize) -> bool {
+    let idx = block_index(game.falling_block);
+    for (dr, dc) in blocks[idx].get_cells(rotation) {
+        let r = row + dr;
+        let c = col + dc;
+        if r < 0 || r >= ROWS as i32 || c < 0 || c >= COLS as i32 {
+            return false;
+        }
+        if game.board[r as usize][c as usize] > 0 {
+            return false;
+        }
+    }
+    true
+}
+
+fn try_move(game: &mut Game, blocks: &[Block], dc: i32, dr: i32) -> bool {
+    let new_row = game.row + dr;
+    let new_col = game.col + dc;
+    if is_drawable(game, blocks, new_row, new_col, game.rotation) {
+        game.row = new_row;
+        game.col = new_col;
+        true
+    } else {
+        false
+    }
+}
+
+fn rotate_block(game: &mut Game, blocks: &[Block]) {
+    let next_rotation =
+        (game.rotation + 1) % blocks[block_index(game.falling_block)].rotations.len();
+
+    // Try rotation in place
+    if is_drawable(game, blocks, game.row, game.col, next_rotation) {
+        game.rotation = next_rotation;
+        return;
+    }
+    // Wall kick left
+    if is_drawable(game, blocks, game.row, game.col - 1, next_rotation) {
+        game.col -= 1;
+        game.rotation = next_rotation;
+        return;
+    }
+    // Wall kick right
+    if is_drawable(game, blocks, game.row, game.col + 1, next_rotation) {
+        game.col += 1;
+        game.rotation = next_rotation;
+        return;
+    }
+    // Cannot rotate
+}
+
+fn settle_block(game: &mut Game, blocks: &[Block]) {
+    let idx = block_index(game.falling_block);
+    for (dr, dc) in blocks[idx].get_cells(game.rotation) {
+        let r = game.row + dr;
+        let c = game.col + dc;
+        if r >= 0 && r < ROWS as i32 && c >= 0 && c < COLS as i32 {
+            game.board[r as usize][c as usize] = 1;
+        }
+    }
+}
+
+fn collapse_rows(game: &mut Game) {
+    for r in (0..ROWS).rev() {
+        if game.board[r].iter().all(|&x| x > 0) {
+            game.score += 10;
+            for rr in (1..=r).rev() {
+                game.board[rr] = game.board[rr - 1];
+            }
+            game.board[0] = [0; COLS];
+        }
     }
 }
