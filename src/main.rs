@@ -10,8 +10,16 @@ use std::io::{Write, stdout};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const ROWS: usize = 20;
-const COLS: usize = 10;
+/*
+    TODO:
+    -add remove multiple lines at once
+    -add levels (increase speed)
+    -add see next block
+    -add colors
+*/
+
+const ROWS: usize = 25;
+const COLS: usize = 12;
 
 type Board = [[u8; COLS]; ROWS];
 
@@ -55,7 +63,7 @@ fn main() {
         falling_block: random_block(),
         rotation: 0,
         row: 0,
-        col: 3,
+        col: 4,
         score: 0,
     };
 
@@ -63,7 +71,7 @@ fn main() {
     let mut last_up = Instant::now() - Duration::from_millis(200);
     let mut last_left = Instant::now() - Duration::from_millis(200);
     let mut last_right = Instant::now() - Duration::from_millis(200);
-    let mut last_down = Instant::now() - Duration::from_millis(200);
+    //let mut last_down = Instant::now() - Duration::from_millis(200);
     let key_cooldown = Duration::from_millis(150);
 
     // Falling timer
@@ -96,10 +104,11 @@ fn main() {
                         }
                     }
                     KeyCode::Down => {
-                        if last_down.elapsed() >= key_cooldown {
+                        /* if last_down.elapsed() >= key_cooldown {
                             try_move(&mut game, &blocks, 0, 1);
                             last_down = Instant::now();
-                        }
+                        } */
+                        try_move(&mut game, &blocks, 0, 1);
                     }
                     KeyCode::Char('q') => break,
                     _ => {}
@@ -117,7 +126,7 @@ fn main() {
                 game.falling_block = random_block();
                 game.rotation = 0;
                 game.row = 0;
-                game.col = 3;
+                game.col = 4;
 
                 if !is_drawable(&game, &blocks, game.row, game.col, game.rotation) {
                     execute!(stdout, terminal::Clear(ClearType::All)).unwrap();
@@ -204,7 +213,16 @@ fn render(game: &Game, blocks: &[Block]) {
     // Draw board
     for r in 0..ROWS {
         for c in 0..COLS {
-            if game.board[r][c] > 0 {
+            if r == ROWS - 1 || c == 0 || c == COLS - 1 {
+                execute!(
+                    stdout,
+                    cursor::MoveTo(c as u16 * 2, r as u16),
+                    SetBackgroundColor(Color::Grey),
+                    Print("  "),
+                    ResetColor
+                )
+                .unwrap();
+            } else if game.board[r][c] > 0 {
                 execute!(
                     stdout,
                     cursor::MoveTo(c as u16 * 2, r as u16),
@@ -250,8 +268,8 @@ fn is_drawable(game: &Game, blocks: &[Block], row: i32, col: i32, rotation: usiz
     for (dr, dc) in blocks[idx].get_cells(rotation) {
         let r = row + dr;
         let c = col + dc;
-        if r < 0 || r >= ROWS as i32 || c < 0 || c >= COLS as i32 {
-            return false;
+        if r < 0 || r >= (ROWS - 1) as i32 || c <= 0 || c >= COLS as i32 - 1 {
+            return false; // respect walls
         }
         if game.board[r as usize][c as usize] > 0 {
             return false;
@@ -301,20 +319,23 @@ fn settle_block(game: &mut Game, blocks: &[Block]) {
     for (dr, dc) in blocks[idx].get_cells(game.rotation) {
         let r = game.row + dr;
         let c = game.col + dc;
-        if r >= 0 && r < ROWS as i32 && c >= 0 && c < COLS as i32 {
+        if r >= 0 && r < (ROWS - 1) as i32 && c >= 0 && c < COLS as i32 {
             game.board[r as usize][c as usize] = 1;
         }
     }
 }
 
 fn collapse_rows(game: &mut Game) {
-    for r in (0..ROWS).rev() {
-        if game.board[r].iter().all(|&x| x > 0) {
+    for r in (0..ROWS - 1).rev() {
+        if game.board[r][1..COLS - 1].iter().all(|&x| x > 0) {
             game.score += 10;
             for rr in (1..=r).rev() {
-                game.board[rr] = game.board[rr - 1];
+                let (upper_rows, lower_rows) = game.board.split_at_mut(rr);
+                lower_rows[0][1..COLS - 1].copy_from_slice(&upper_rows[rr - 1][1..COLS - 1]);
             }
-            game.board[0] = [0; COLS];
+            for c in 1..COLS - 1 {
+                game.board[0][c] = 0;
+            }
         }
     }
 }
